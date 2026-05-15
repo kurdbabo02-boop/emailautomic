@@ -16,19 +16,23 @@ from email.utils import formataddr
 def build_email_bodies(
     recipient_name,
     message_body,
+    message_body_after_logo="",
     logo_src=None,
     logo_width=160,
-    logo_position="Bovenaan",
+    logo_position="Tussen tekstblokken",
     logo_align="Links",
 ):
-    plain_text = f"Geachte {recipient_name},\n\n{message_body.strip()}"
+    text_parts = [part.strip() for part in [message_body, message_body_after_logo] if part.strip()]
+    plain_text = f"Geachte {recipient_name},\n\n" + "\n\n".join(text_parts)
     safe_name = html.escape(str(recipient_name))
     safe_body = html.escape(message_body.strip()).replace("\n", "<br>\n")
+    safe_body_after_logo = html.escape(message_body_after_logo.strip()).replace("\n", "<br>\n")
     normalized_position = logo_position.lower()
     align_map = {"Links": "left", "Midden": "center", "Rechts": "right"}
     logo_td_align = align_map.get(logo_align, "left")
     top_logo_block = ""
     greeting_logo_block = ""
+    between_text_logo_block = ""
     bottom_logo_block = ""
 
     if logo_src and normalized_position != "niet tonen":
@@ -41,10 +45,32 @@ def build_email_bodies(
         """
         if normalized_position == "onder aanhef":
             greeting_logo_block = logo_block
+        elif normalized_position == "tussen tekstblokken":
+            between_text_logo_block = logo_block.replace("padding:0 0 20px 0;", "padding:20px 0;")
         elif normalized_position == "onder bericht":
             bottom_logo_block = logo_block.replace("padding:0 0 20px 0;", "padding:20px 0 0 0;")
         else:
             top_logo_block = logo_block
+
+    body_before_logo_block = ""
+    if safe_body:
+        body_before_logo_block = f"""
+                    <tr>
+                        <td style="color:#202124;">
+                            <p style="margin:0;color:#202124;">{safe_body}</p>
+                        </td>
+                    </tr>
+        """
+
+    body_after_logo_block = ""
+    if safe_body_after_logo:
+        body_after_logo_block = f"""
+                    <tr>
+                        <td style="color:#202124;">
+                            <p style="margin:0;color:#202124;">{safe_body_after_logo}</p>
+                        </td>
+                    </tr>
+        """
 
     html_body = f"""<!doctype html>
 <html>
@@ -65,11 +91,9 @@ def build_email_bodies(
                         </td>
                     </tr>
                     {greeting_logo_block}
-                    <tr>
-                        <td style="color:#202124;">
-                            <p style="margin:0;color:#202124;">{safe_body}</p>
-                        </td>
-                    </tr>
+                    {body_before_logo_block}
+                    {between_text_logo_block}
+                    {body_after_logo_block}
                     {bottom_logo_block}
                 </table>
             </td>
@@ -289,20 +313,17 @@ with right:
 
     st.markdown("**Berichttekst**")
     st.caption(
-        "Schrijf je bericht hieronder. De aanhef **Geachte [naam],** wordt automatisch "
-        "voor elk bericht toegevoegd op basis van de naam van de ontvanger."
+        "Schrijf de tekst die boven het logo moet staan. De aanhef **Geachte [naam],** "
+        "wordt automatisch toegevoegd op basis van de naam van de ontvanger."
     )
 
     message_body = st.text_area(
-        "Berichttekst (na de aanhef)",
-        height=230,
+        "Tekst boven logo",
+        height=170,
         placeholder=(
             "bedankt voor je interesse in ons aanbod.\n\n"
-            "We nodigen je graag uit voor...\n\n"
-            "Met vriendelijke groeten,\n"
-            "Jouw naam"
+            "We nodigen je graag uit voor..."
         ),
-        label_visibility="collapsed",
     )
 
     st.markdown("**Logo toevoegen**")
@@ -317,14 +338,23 @@ with right:
     with c_logo_position:
         logo_position = st.selectbox(
             "Logo positie",
-            ["Bovenaan", "Onder aanhef", "Onder bericht", "Niet tonen"],
+            ["Tussen tekstblokken", "Bovenaan", "Onder aanhef", "Onder bericht", "Niet tonen"],
         )
     with c_logo_align:
         logo_align = st.selectbox("Logo uitlijning", ["Links", "Midden", "Rechts"])
 
+    message_body_after_logo = st.text_area(
+        "Tekst onder logo",
+        height=150,
+        placeholder=(
+            "Met vriendelijke groeten,\n"
+            "Jouw naam"
+        ),
+    )
+
     # ── Live preview ─────────────────────────────────────────
     st.markdown("**👁️ Voorbeeld e-mail**")
-    if message_body.strip():
+    if message_body.strip() or message_body_after_logo.strip():
         preview_name = (
             st.session_state.recipients[0]["Naam"]
             if st.session_state.recipients
@@ -333,6 +363,7 @@ with right:
         _, preview_html = build_email_bodies(
             preview_name,
             message_body,
+            message_body_after_logo=message_body_after_logo,
             logo_src=logo_data_uri(logo_file),
             logo_width=logo_width,
             logo_position=logo_position,
@@ -363,7 +394,7 @@ with right:
             errors.append("Vul je app-wachtwoord in via de zijbalk.")
         if not subject.strip():
             errors.append("Onderwerp mag niet leeg zijn.")
-        if not message_body.strip():
+        if not message_body.strip() and not message_body_after_logo.strip():
             errors.append("Berichttekst mag niet leeg zijn.")
 
         if errors:
@@ -413,6 +444,7 @@ with right:
                         full_text, full_html = build_email_bodies(
                             name,
                             message_body,
+                            message_body_after_logo=message_body_after_logo,
                             logo_src=f"cid:{logo_cid}" if logo_cid else None,
                             logo_width=logo_width,
                             logo_position=logo_position,
