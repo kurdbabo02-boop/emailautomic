@@ -13,20 +13,38 @@ from email.utils import formatdate, make_msgid
 from email.utils import formataddr
 
 
-def build_email_bodies(recipient_name, message_body, logo_src=None, logo_width=160):
+def build_email_bodies(
+    recipient_name,
+    message_body,
+    logo_src=None,
+    logo_width=160,
+    logo_position="Bovenaan",
+    logo_align="Links",
+):
     plain_text = f"Geachte {recipient_name},\n\n{message_body.strip()}"
     safe_name = html.escape(str(recipient_name))
     safe_body = html.escape(message_body.strip()).replace("\n", "<br>\n")
-    logo_block = ""
+    normalized_position = logo_position.lower()
+    align_map = {"Links": "left", "Midden": "center", "Rechts": "right"}
+    logo_td_align = align_map.get(logo_align, "left")
+    top_logo_block = ""
+    greeting_logo_block = ""
+    bottom_logo_block = ""
 
-    if logo_src:
+    if logo_src and normalized_position != "niet tonen":
         logo_block = f"""
             <tr>
-                <td style="padding:0 0 20px 0;">
-                    <img src="{logo_src}" width="{int(logo_width)}" alt="Logo" style="display:block;max-width:100%;height:auto;border:0;">
+                <td align="{logo_td_align}" style="padding:0 0 20px 0;">
+                    <img src="{logo_src}" width="{int(logo_width)}" alt="Logo" style="display:inline-block;max-width:100%;height:auto;border:0;">
                 </td>
             </tr>
         """
+        if normalized_position == "onder aanhef":
+            greeting_logo_block = logo_block
+        elif normalized_position == "onder bericht":
+            bottom_logo_block = logo_block.replace("padding:0 0 20px 0;", "padding:20px 0 0 0;")
+        else:
+            top_logo_block = logo_block
 
     html_body = f"""<!doctype html>
 <html>
@@ -40,13 +58,19 @@ def build_email_bodies(recipient_name, message_body, logo_src=None, logo_width=1
         <tr>
             <td align="left" style="padding:24px;">
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background-color:#ffffff;color:#202124;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;">
-                    {logo_block}
+                    {top_logo_block}
                     <tr>
                         <td style="color:#202124;">
                             <p style="margin:0 0 16px 0;color:#202124;">Geachte {safe_name},</p>
+                        </td>
+                    </tr>
+                    {greeting_logo_block}
+                    <tr>
+                        <td style="color:#202124;">
                             <p style="margin:0;color:#202124;">{safe_body}</p>
                         </td>
                     </tr>
+                    {bottom_logo_block}
                 </table>
             </td>
         </tr>
@@ -289,6 +313,14 @@ with right:
         label_visibility="collapsed",
     )
     logo_width = st.slider("Logo breedte", min_value=80, max_value=320, value=160, step=10)
+    c_logo_position, c_logo_align = st.columns(2)
+    with c_logo_position:
+        logo_position = st.selectbox(
+            "Logo positie",
+            ["Bovenaan", "Onder aanhef", "Onder bericht", "Niet tonen"],
+        )
+    with c_logo_align:
+        logo_align = st.selectbox("Logo uitlijning", ["Links", "Midden", "Rechts"])
 
     # ── Live preview ─────────────────────────────────────────
     st.markdown("**👁️ Voorbeeld e-mail**")
@@ -303,6 +335,8 @@ with right:
             message_body,
             logo_src=logo_data_uri(logo_file),
             logo_width=logo_width,
+            logo_position=logo_position,
+            logo_align=logo_align,
         )
         components.html(preview_html, height=340, scrolling=True)
     else:
@@ -381,6 +415,8 @@ with right:
                             message_body,
                             logo_src=f"cid:{logo_cid}" if logo_cid else None,
                             logo_width=logo_width,
+                            logo_position=logo_position,
+                            logo_align=logo_align,
                         )
 
                         alternative.attach(MIMEText(full_text, "plain", "utf-8"))
