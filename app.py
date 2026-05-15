@@ -6,11 +6,13 @@ import time
 import uuid
 import base64
 import html
+import io
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
 from email.utils import formatdate, make_msgid
 from email.utils import formataddr
+from PIL import Image, ImageChops
 
 
 def build_email_bodies(
@@ -21,6 +23,7 @@ def build_email_bodies(
     logo_width=160,
     logo_position="Tussen tekstblokken",
     logo_align="Links",
+    logo_spacing=6,
 ):
     text_parts = [part.strip() for part in [message_body, message_body_after_logo] if part.strip()]
     plain_text = f"Geachte {recipient_name},\n\n" + "\n\n".join(text_parts)
@@ -30,6 +33,8 @@ def build_email_bodies(
     normalized_position = logo_position.lower()
     align_map = {"Links": "left", "Midden": "center", "Rechts": "right"}
     logo_td_align = align_map.get(logo_align, "left")
+    safe_logo_width = max(40, min(int(logo_width), 220))
+    safe_logo_spacing = max(0, min(int(logo_spacing), 32))
     top_logo_block = ""
     greeting_logo_block = ""
     between_text_logo_block = ""
@@ -38,17 +43,17 @@ def build_email_bodies(
     if logo_src and normalized_position != "niet tonen":
         logo_block = f"""
             <tr>
-                <td align="{logo_td_align}" style="padding:0 0 20px 0;">
-                    <img src="{logo_src}" width="{int(logo_width)}" alt="Logo" style="display:inline-block;max-width:100%;height:auto;border:0;">
+                <td align="{logo_td_align}" style="padding:{safe_logo_spacing}px 0;">
+                    <img src="{logo_src}" width="{safe_logo_width}" alt="Logo" style="display:inline-block;width:{safe_logo_width}px;max-width:{safe_logo_width}px;height:auto;border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;">
                 </td>
             </tr>
         """
         if normalized_position == "onder aanhef":
             greeting_logo_block = logo_block
         elif normalized_position == "tussen tekstblokken":
-            between_text_logo_block = logo_block.replace("padding:0 0 20px 0;", "padding:20px 0;")
+            between_text_logo_block = logo_block
         elif normalized_position == "onder bericht":
-            bottom_logo_block = logo_block.replace("padding:0 0 20px 0;", "padding:20px 0 0 0;")
+            bottom_logo_block = logo_block
         else:
             top_logo_block = logo_block
 
@@ -105,11 +110,47 @@ def build_email_bodies(
     return plain_text, html_body
 
 
-def logo_data_uri(uploaded_logo):
+def prepare_logo_image(uploaded_logo, trim_whitespace=True):
     if not uploaded_logo:
-        return None
-    encoded = base64.b64encode(uploaded_logo.getvalue()).decode("ascii")
+        return None, None, None
+
+    logo_bytes = uploaded_logo.getvalue()
     mime_type = uploaded_logo.type or "image/png"
+
+    if not trim_whitespace or mime_type == "image/gif":
+        return logo_bytes, mime_type, uploaded_logo.name
+
+    try:
+        with Image.open(io.BytesIO(logo_bytes)) as image:
+            image_format = image.format or ("JPEG" if mime_type == "image/jpeg" else "PNG")
+
+            if image.mode in ("RGBA", "LA"):
+                bbox = image.getchannel("A").getbbox()
+            else:
+                rgb_image = image.convert("RGB")
+                background = Image.new("RGB", rgb_image.size, rgb_image.getpixel((0, 0)))
+                diff = ImageChops.difference(rgb_image, background)
+                bbox = diff.getbbox()
+
+            if bbox:
+                image = image.crop(bbox)
+
+            output = io.BytesIO()
+            if image_format.upper() in {"JPEG", "JPG"}:
+                image = image.convert("RGB")
+                image.save(output, format="JPEG", quality=92, optimize=True)
+            else:
+                image.save(output, format=image_format)
+
+            return output.getvalue(), mime_type, uploaded_logo.name
+    except Exception:
+        return logo_bytes, mime_type, uploaded_logo.name
+
+
+def logo_data_uri(logo_bytes, mime_type):
+    if not logo_bytes:
+        return None
+    encoded = base64.b64encode(logo_bytes).decode("ascii")
     return f"data:{mime_type};base64,{encoded}"
 
 # ── Page config ──────────────────────────────────────────────
@@ -333,7 +374,20 @@ with right:
         help="Het logo wordt als inline afbeelding meegestuurd, niet als losse link.",
         label_visibility="collapsed",
     )
-    logo_width = st.slider("Logo breedte", min_value=80, max_value=320, value=160, step=10)
+    trim_logo_whitespace = st.checkbox(
+        "Witte rand rond logo automatisch verwijderen",
+        value=True,
+        help="Aan laten staan als je logo in de mail te veel lege ruimte boven of onder heeft.",
+    )
+    logo_width = st.slider("Logo breedte", min_value=40, max_value=220, value=120, step=10)
+    logo_spacing = st.slider(
+        "Ruimte rond logo",
+        min_value=0,
+        max_value=32,
+        value=6,
+        step=2,
+        help="Gebruik 0-8 voor een compacte mail. De uiteindelijke ruimte kan groter lijken als je logobestand zelf veel witte rand heeft.",
+    )
     c_logo_position, c_logo_align = st.columns(2)
     with c_logo_position:
         logo_position = st.selectbox(
@@ -351,6 +405,10 @@ with right:
             "Jouw naam"
         ),
     )
+    logo_bytes, logo_mime_type, logo_filename = prepare_logo_image(
+        logo_file,
+        trim_whitespace=trim_logo_whitespace,
+    )
 
     # ── Live preview ─────────────────────────────────────────
     st.markdown("**👁️ Voorbeeld e-mail**")
@@ -364,10 +422,11 @@ with right:
             preview_name,
             message_body,
             message_body_after_logo=message_body_after_logo,
-            logo_src=logo_data_uri(logo_file),
+            logo_src=logo_data_uri(logo_bytes, logo_mime_type),
             logo_width=logo_width,
             logo_position=logo_position,
             logo_align=logo_align,
+            logo_spacing=logo_spacing,
         )
         components.html(preview_html, height=340, scrolling=True)
     else:
@@ -440,7 +499,7 @@ with right:
                         msg["Content-Language"] = "nl"
                         msg["Auto-Submitted"] = "no"
 
-                        logo_cid = f"logo-{uuid.uuid4().hex}" if logo_file else None
+                        logo_cid = f"logo-{uuid.uuid4().hex}" if logo_bytes else None
                         full_text, full_html = build_email_bodies(
                             name,
                             message_body,
@@ -449,18 +508,19 @@ with right:
                             logo_width=logo_width,
                             logo_position=logo_position,
                             logo_align=logo_align,
+                            logo_spacing=logo_spacing,
                         )
 
                         alternative.attach(MIMEText(full_text, "plain", "utf-8"))
                         alternative.attach(MIMEText(full_html, "html", "utf-8"))
 
-                        if logo_file and logo_cid:
-                            logo_subtype = (logo_file.type or "image/png").split("/")[-1].lower()
+                        if logo_bytes and logo_cid:
+                            logo_subtype = (logo_mime_type or "image/png").split("/")[-1].lower()
                             if logo_subtype == "jpg":
                                 logo_subtype = "jpeg"
-                            logo_image = MIMEImage(logo_file.getvalue(), _subtype=logo_subtype)
+                            logo_image = MIMEImage(logo_bytes, _subtype=logo_subtype)
                             logo_image.add_header("Content-ID", f"<{logo_cid}>")
-                            logo_image.add_header("Content-Disposition", "inline", filename=logo_file.name)
+                            logo_image.add_header("Content-Disposition", "inline", filename=logo_filename)
                             msg.attach(logo_image)
 
                         server.sendmail(sender_email_clean, email, msg.as_string())
